@@ -147,7 +147,12 @@ export function makeGenerateHandler(generate, connOrPath = SAMPLE_CONN) {
       const out = await generate(payload.question, schema)
       sendJson(res, 200, { sql: out.sql, model: out.model, executed: false })
     } catch (err) {
-      sendJson(res, 502, { error: '生成失败：' + (err && err.message ? err.message : String(err)) })
+      const code = err && err.code ? err.code : 'LLM_ERROR'
+      sendJson(res, code === 'ETIMEOUT' ? 504 : 502, {
+        error: '生成失败：' + (err && err.message ? err.message : String(err)),
+        code,
+        retryable: true,
+      })
     }
   }
 }

@@ -1,0 +1,11 @@
+node_modules/
+tmp/
+evidence/
+*.local.*
+connections.json
+*.log
+audit.ndjson
+limits.json
+PROGRESS.md
+开工提示词.md
+发布清单.md

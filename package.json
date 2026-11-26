@@ -1,0 +1,11 @@
+{
+  "name": "@local/dsh-db-lens",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Read-only, limited, audited database lens for DSH agents. SQLite/MySQL/PostgreSQL connections, schema tree, guarded queries, NL-to-SQL with human confirmation, agent tools.",
+  "exports": { ".": "./index.js", "./client": "./client.js", "./icon": "./icon.svg" },
+  "files": ["index.js", "client.js", "sql-guard.js", "limits.js", "audit.js", "query-worker.js", "nl2sql.js", "agent-tools.js", "drivers.js", "connections.js", "cordis.patch.yml", "icon.svg", "sample.sqlite"],
+  "dsh": { "bundle": { "patch": "./cordis.patch.yml" }, "client": { "platform": "web", "immediately": true } },
+  "dependencies": { "mysql2": "^3.24.6", "pg": "^8.23.1" }
+}

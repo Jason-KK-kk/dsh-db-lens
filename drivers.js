@@ -196,3 +196,33 @@ export function runQueryFor(conn, sql, params = [], limits = DEFAULTS) {
   if (conn.type === 'pg') return runAsync(conn, sql, params, limits, 'pg')
   throw new Error('未知连接类型: ' + conn.type)
 }
+
+// 试连：只建立连接即关，不发任何 SQL（sqlite 打开 / mysql ping / pg connect）。
+export async function testConnectionFor(conn) {
+  if (!conn || conn.type === 'sqlite') {
+    const p = conn?.path || SAMPLE_PATH
+    const db = new DatabaseSync(p, { readOnly: true })
+    db.close()
+    return { engine: 'sqlite', database: path.basename(p) }
+  }
+  if (conn.type === 'mysql') {
+    const mysql = await import('mysql2/promise')
+    const client = await mysql.createConnection({
+      host: conn.host, port: conn.port || 3306, user: conn.user, password: conn.password ?? '',
+      database: conn.database, connectTimeout: 5000,
+    })
+    try { await client.ping() } finally { client.destroy() }
+    return { engine: 'mysql', database: conn.database }
+  }
+  if (conn.type === 'pg') {
+    const pg = await import('pg')
+    const client = new pg.default.Client({
+      host: conn.host, port: conn.port || 5432, user: conn.user, password: conn.password ?? '',
+      database: conn.database, connectionTimeoutMillis: 5000,
+    })
+    await client.connect()
+    try { await client.end() } catch { /* 已关 */ }
+    return { engine: 'pg', database: conn.database }
+  }
+  throw new Error('未知连接类型: ' + conn.type)
+}

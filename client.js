@@ -14,6 +14,8 @@ window.__ModuleLoader__.load({
     const GEN_EP = '/dblens/generate'
     const AUDIT_EP = '/dblens/audit'
     const CONN_EP = '/dblens/connections'
+    const TEST_EP = '/dblens/test-connection'
+    const MODELS_EP = '/dblens/models'
 
     const CSS = `
 .dblens{
@@ -38,7 +40,7 @@ window.__ModuleLoader__.load({
 .dblens ::selection{background:rgba(61,174,124,.28)}
 .dblens :focus-visible{outline:2px solid var(--jade);outline-offset:2px;border-radius:var(--r-ctl)}
 .dblens button{font-family:inherit}
-.dblens .scroll{scrollbar-width:thin;scrollbar-color:#3B434F #101317}
+.dblens .scroll{scrollbar-width:auto;scrollbar-color:auto}
 .dblens .scroll::-webkit-scrollbar{width:12px;height:12px}
 .dblens .scroll::-webkit-scrollbar-track{background:#101317;border-radius:8px}
 .dblens .scroll::-webkit-scrollbar-thumb{background:#3B434F;border:3px solid #101317;border-radius:8px}
@@ -110,7 +112,8 @@ window.__ModuleLoader__.load({
 .dblens .rail-collapsed .vlabel{writing-mode:vertical-rl;font:9px/1 var(--mono);letter-spacing:.2em;color:var(--ink-3);text-transform:uppercase}
 .dblens .rail-full{display:flex;flex-direction:column;min-height:0;flex:1}
 .dblens .rail-sec{border-bottom:1px solid var(--line)}
-.dblens .rail-sec-head{display:flex;align-items:center;gap:6px;width:100%;padding:9px var(--s3);background:none;border:none;color:inherit;cursor:pointer;text-align:left}
+.dblens .rail-sec-headrow{display:flex;align-items:center;gap:6px;padding-right:var(--s2)}
+.dblens .rail-sec-head{display:flex;align-items:center;gap:6px;flex:1;min-width:0;padding:9px var(--s3);background:none;border:none;color:inherit;cursor:pointer;text-align:left}
 .dblens .rail-sec-head:hover{background:#12161A}
 .dblens .rail-sec-head .eyebrow{font:9px/1 var(--mono);letter-spacing:.16em;color:var(--ink-3);text-transform:uppercase}
 .dblens .rail-sec-head .grow{flex:1}
@@ -126,7 +129,7 @@ window.__ModuleLoader__.load({
 .dblens .conn-form{margin-top:var(--s2);display:grid;grid-template-columns:1fr 1fr;gap:6px}
 .dblens .conn-form .inp,.dblens .conn-form .sel{width:100%;min-width:0}
 .dblens .conn-form .wide{grid-column:1/-1}
-.dblens .conn-msg{margin-top:6px;font-size:11px}
+.dblens .ask-model{max-width:300px;min-width:0}
 .dblens .db-row{display:flex;align-items:center;gap:6px;padding:6px 8px;background:var(--surface-2);border:1px solid var(--line);border-radius:var(--r-ctl);margin-bottom:var(--s2)}
 .dblens .db-row .nm{font:12px/1.4 var(--mono);color:var(--ink);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .dblens .db-row .grow{flex:1}
@@ -270,16 +273,18 @@ window.__ModuleLoader__.load({
     }
 
     function RailSec(props) {
-      const { eyebrow, count, open, onToggle, flex, body, scroll } = props
+      const { eyebrow, count, open, onToggle, flex, body, scroll, extra } = props
       return h('section', {
         className: 'rail-sec', 'data-open': open ? '1' : '0',
         style: flex ? { flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0, borderBottom: 'none' } : null,
       },
-        h('button', { className: 'rail-sec-head', onClick: onToggle, 'aria-expanded': open },
-          h(Chev),
-          h('span', { className: 'eyebrow' }, eyebrow),
-          h('span', { className: 'grow' }),
-          count ? h('span', { className: 'eyebrow' }, count) : null),
+        h('div', { className: 'rail-sec-headrow' },
+          h('button', { className: 'rail-sec-head', onClick: onToggle, 'aria-expanded': open },
+            h(Chev),
+            h('span', { className: 'eyebrow' }, eyebrow),
+            h('span', { className: 'grow' }),
+            count ? h('span', { className: 'eyebrow' }, count) : null),
+          extra || null),
         h('div', { className: 'rail-sec-body', style: flex ? { paddingBottom: '8px' } : null }, body),
         scroll || null)
     }
@@ -310,6 +315,7 @@ window.__ModuleLoader__.load({
       const [activeId, setActiveId] = useState('sample')
       const [showForm, setShowForm] = useState(false)
       const [msg, setMsg] = useState(null)
+      const [testing, setTesting] = useState(false)
       const [form, setForm] = useState({ type: 'mysql', name: '', host: '127.0.0.1', port: '3306', user: '', password: '', database: '', path: '' })
 
       const load = useCallback(async () => {
@@ -322,28 +328,56 @@ window.__ModuleLoader__.load({
       }, [])
       useEffect(() => { load() }, [load, refreshKey])
 
+      const errMsg = (e) => (e && e.message ? e.message : String(e))
+      const testById = useCallback(async (id, prefix) => {
+        setTesting(true)
+        try {
+          const t = await fetch(TEST_EP, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ id }) })
+          const tj = await t.json()
+          if (t.ok && tj.ok) setMsg({ ok: true, text: prefix + ' · 连接正常（' + tj.engine + ' · ' + (tj.database || '') + '）' })
+          else setMsg({ ok: false, text: prefix + '，但连接失败：' + (tj.error || 'HTTP ' + t.status) })
+        } catch (e) { setMsg({ ok: false, text: prefix + '，但试连失败：' + errMsg(e) }) }
+        finally { setTesting(false) }
+      }, [])
+
       const select = useCallback(async (id) => {
         setMsg(null)
         const r = await fetch(CONN_EP, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ action: 'select', id }) })
         const j = await r.json()
         if (!r.ok) { setMsg({ ok: false, text: j.error || '切换失败' }); return }
         setActiveId(j.activeId)
-        setMsg({ ok: true, text: '已切换连接' })
         onChanged()
-      }, [onChanged])
+        await testById(id, '已切换')
+      }, [onChanged, testById])
 
-      const add = useCallback(async () => {
-        setMsg(null)
+      const buildPayload = () => {
         const payload = { type: form.type, name: form.name || (form.type + ' 连接') }
         if (form.type === 'sqlite') payload.path = form.path
         else { payload.host = form.host; payload.port = parseInt(form.port, 10); payload.user = form.user; payload.password = form.password; payload.database = form.database }
-        const r = await fetch(CONN_EP, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(payload) })
+        return payload
+      }
+
+      const testForm = useCallback(async () => {
+        setMsg(null)
+        setTesting(true)
+        try {
+          const r = await fetch(TEST_EP, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(buildPayload()) })
+          const j = await r.json()
+          if (r.ok && j.ok) setMsg({ ok: true, text: '连接成功（' + j.engine + ' · ' + (j.database || '') + '），尚未保存' })
+          else setMsg({ ok: false, text: '连接失败：' + (j.error || 'HTTP ' + r.status) })
+        } catch (e) { setMsg({ ok: false, text: '连接失败：' + errMsg(e) }) }
+        finally { setTesting(false) }
+      }, [form])
+
+      const add = useCallback(async () => {
+        setMsg(null)
+        const r = await fetch(CONN_EP, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(buildPayload()) })
         const j = await r.json()
         if (!r.ok) { setMsg({ ok: false, text: j.error || '添加失败' }); return }
-        setMsg({ ok: true, text: '已添加 ' + j.name })
         setShowForm(false)
         load()
-      }, [form, load])
+        await testById(j.id, '已添加 ' + j.name)
+      }, [form, load, testById])
 
       const set = (k) => (e) => setForm((f) => ({ ...f, [k]: e.target.value }))
       const inp = (k, ph, type, wide) => h('input', { key: k, className: 'inp' + (wide ? ' wide' : ''), placeholder: ph, type: type || 'text', value: form[k], onChange: set(k) })
@@ -366,18 +400,25 @@ window.__ModuleLoader__.load({
             form.type === 'sqlite'
               ? inp('path', 'SQLite 文件路径', 'text', true)
               : [inp('host', '主机'), inp('port', '端口'), inp('user', '只读用户名'), inp('password', '密码', 'password'), inp('database', '数据库名', 'text', true)],
-            h('button', { className: 'btn primary wide', onClick: add }, '保存连接')) : null,
-          msg ? h('div', { className: 'conn-msg', style: { color: msg.ok ? 'var(--jade-ink)' : 'var(--red-ink)' } }, msg.text) : null),
+            h('button', { className: 'btn wide', onClick: testForm, disabled: testing }, testing ? '测试中…' : '测试连接'),
+            h('button', { className: 'btn primary wide', onClick: add, disabled: testing }, '保存连接')) : null,
+          msg ? h(Notice, { kind: msg.ok ? 'ok' : 'bad', ic: msg.ok ? '✓' : '⛔', text: msg.text }) : null),
       })
     }
     function TableNode(props) {
-      const { t, f } = props
+      const { t, f, bulk } = props
       const [open, setOpen] = useState(!!f)
       const [seenF, setSeenF] = useState(f)
       // 自动展开只在「过滤开/关」切换那一帧发生：过滤态内持续强制展开会让 caret 点了没反应。
       if (seenF !== f) {
         setSeenF(f)
         if (!!seenF !== !!f) setOpen(!!f)
+      }
+      // 批量信号只在 seq 变化那一帧生效；之后 open 仍是唯一折叠开关（单表 caret 不受影响）。
+      const [seenBulk, setSeenBulk] = useState(bulk ? bulk.seq : 0)
+      if (bulk && bulk.seq !== seenBulk) {
+        setSeenBulk(bulk.seq)
+        setOpen(bulk.open)
       }
       const cols = f && !t.name.toLowerCase().includes(f)
         ? t.columns.filter((c) => c.name.toLowerCase().includes(f))
@@ -402,6 +443,7 @@ window.__ModuleLoader__.load({
     function SchemaSec(props) {
       const { schema, error, open, onToggle } = props
       const [filter, setFilter] = useState('')
+      const [bulk, setBulk] = useState({ seq: 0, open: false })
       const f = filter.trim().toLowerCase()
       const tables = schema ? schema.tables.filter((t) => !f || t.name.toLowerCase().includes(f) || t.columns.some((c) => c.name.toLowerCase().includes(f))) : []
 
@@ -410,10 +452,15 @@ window.__ModuleLoader__.load({
       else if (!schema) tree = h('div', { className: 'rail-empty' }, '正在加载 schema…')
       else if (!schema.tables.length) tree = h('div', { className: 'rail-empty' }, '库里没有用户表')
       else if (!tables.length) tree = h('div', { className: 'rail-empty' }, '没有匹配的表或列')
-      else tree = tables.map((t) => h(TableNode, { key: t.name, t, f }))
+      else tree = tables.map((t) => h(TableNode, { key: t.name, t, f, bulk }))
 
       return h(RailSec, {
         eyebrow: 'Schema', count: schema ? tables.length + ' 表' : '', open, onToggle, flex: true,
+        extra: h('button', {
+          className: 'btn sm ghost', disabled: !tables.length,
+          onClick: () => setBulk((b) => ({ seq: b.seq + 1, open: !b.open })),
+          title: '批量展开 / 折叠当前列表（过滤态只作用于过滤结果）',
+        }, bulk.open ? '全部折叠' : '全部展开'),
         body: h('div', null,
           h('div', { className: 'db-row' },
             h('span', { className: 'nm' }, schema ? schema.database : '—'),
@@ -451,6 +498,21 @@ window.__ModuleLoader__.load({
       const [genErr, setGenErr] = useState(null)
       const [generating, setGenerating] = useState(false)
       const [done, setDone] = useState(false)
+      const [models, setModels] = useState(null)
+      const [modelSel, setModelSel] = useState(null)
+      const [modelsNote, setModelsNote] = useState(null)
+
+      const loadModels = useCallback(async () => {
+        try {
+          const r = await fetch(MODELS_EP)
+          const j = await r.json()
+          if (!r.ok) { setModels([]); setModelsNote('模型目录不可用，走 DSH 当前默认模型'); return }
+          setModels(j.models || [])
+          setModelSel((prev) => (prev && (j.models || []).some((m) => m.provider === prev.provider && m.id === prev.model) ? prev : (j.default || null)))
+          setModelsNote((j.failedProviders || []).length ? '部分 provider 模型目录不可用：' + j.failedProviders.join('、') : null)
+        } catch { setModels([]); setModelsNote('模型目录不可用，走 DSH 当前默认模型') }
+      }, [])
+      useEffect(() => { loadModels() }, [loadModels, open])
 
       const generate = useCallback(async () => {
         setGenerating(true)
@@ -461,7 +523,7 @@ window.__ModuleLoader__.load({
           const r = await fetch(GEN_EP, {
             method: 'POST',
             headers: { 'content-type': 'application/json' },
-            body: JSON.stringify({ question }),
+            body: JSON.stringify({ question, ...(modelSel ? { provider: modelSel.provider, model: modelSel.model } : {}) }),
           })
           const j = await r.json()
           if (!r.ok) {
@@ -477,7 +539,7 @@ window.__ModuleLoader__.load({
         } finally {
           setGenerating(false)
         }
-      }, [question])
+      }, [question, modelSel])
 
       const confirm = useCallback(() => {
         onExec(genSql)
@@ -501,9 +563,21 @@ window.__ModuleLoader__.load({
         h('div', { className: 'qbar' },
           h('button', { className: 'btn', onClick: generate, disabled: generating || !question.trim() },
             generating ? '生成中…' : '生成 SQL'),
+          h('select', {
+            className: 'sel ask-model', 'aria-label': '问数模型',
+            value: modelSel ? modelSel.provider + '/' + modelSel.model : '',
+            disabled: !models || !models.length,
+            title: '问数所用模型；默认＝DSH 当前默认模型',
+            onChange: (e) => {
+              const v = e.target.value
+              const i = v.indexOf('/')
+              setModelSel({ provider: v.slice(0, i), model: v.slice(i + 1) })
+            },
+          }, (models || []).map((m) => h('option', { key: m.provider + '/' + m.id, value: m.provider + '/' + m.id }, m.name + '（' + m.provider + '/' + m.id + '）'))),
           h('span', { className: 'grow' }),
           h('span', { className: 'qhint' }, '生成阶段零查询发出')),
         h(Notice, { kind: 'bad', ic: '⛔', text: genErr }),
+        h(Notice, { kind: 'info', ic: 'ℹ', text: modelsNote }),
         genSql != null ? h('div', { className: 'gate' },
           h('div', { className: 'gate-head' },
             h('span', { className: 'ic' }, '🔒'),

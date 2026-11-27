@@ -7,8 +7,8 @@ import { loadLimits, DEFAULTS } from './limits.js'
 import { audit, readAuditTail } from './audit.js'
 import { generateSql } from './nl2sql.js'
 import { makeDbTools } from './agent-tools.js'
-import { extractSchema, runQuery, extractSchemaFor, runQueryFor } from './drivers.js'
-import { loadConnections, getActive, addConnection, setActive, sanitizeConn, SAMPLE_CONN } from './connections.js'
+import { extractSchema, runQuery, extractSchemaFor, runQueryFor, testConnectionFor } from './drivers.js'
+import { loadConnections, getActive, addConnection, setActive, sanitizeConn, validateConn, SAMPLE_CONN } from './connections.js'
 
 // 兼容旧调用方（测试/worker 仍从 index 导入）
 export { extractSchema, runQuery }
@@ -142,9 +142,23 @@ export function makeGenerateHandler(generate, connOrPath = SAMPLE_CONN) {
       sendJson(res, 400, { error: 'question 不能为空' })
       return
     }
+    const hasProvider = payload.provider != null
+    const hasModel = payload.model != null
+    if (hasProvider !== hasModel) {
+      sendJson(res, 400, { error: 'provider 与 model 须同时提供' })
+      return
+    }
+    let override
+    if (hasProvider) {
+      if (typeof payload.provider !== 'string' || !payload.provider.trim() || typeof payload.model !== 'string' || !payload.model.trim()) {
+        sendJson(res, 400, { error: 'provider 与 model 须为非空字符串' })
+        return
+      }
+      override = { provider: payload.provider, model: payload.model }
+    }
     try {
       const schema = await extractSchemaFor(getConn())
-      const out = await generate(payload.question, schema)
+      const out = await generate(payload.question, schema, override)
       sendJson(res, 200, { sql: out.sql, model: out.model, executed: false })
     } catch (err) {
       const code = err && err.code ? err.code : 'LLM_ERROR'
@@ -190,6 +204,51 @@ export function makeConnectionsHandler(state) {
   }
 }
 
+// 试连路由：只试连不查数、不落盘、不进查询审计。表单全量或 {id} 试已存连接；响应不含密码。
+export function makeTestConnectionHandler(state) {
+  return async function handler(req, res) {
+    if (req.method !== 'POST') { sendJson(res, 405, { error: '仅 POST' }); return }
+    let payload
+    try { payload = JSON.parse(await readBody(req)) } catch { sendJson(res, 400, { ok: false, error: '请求体不是合法 JSON' }); return }
+    let conn
+    if (payload && typeof payload.id === 'string' && payload.id) {
+      conn = state.connections.find((c) => c.id === payload.id)
+      if (!conn) { sendJson(res, 400, { ok: false, error: '连接不存在: ' + payload.id }); return }
+    } else {
+      const err = validateConn(payload)
+      if (err) { sendJson(res, 400, { ok: false, error: err }); return }
+      conn = payload
+    }
+    try {
+      sendJson(res, 200, { ok: true, ...(await testConnectionFor(conn)) })
+    } catch (err) {
+      sendJson(res, 500, { ok: false, error: err && err.message ? err.message : String(err) })
+    }
+  }
+}
+
+// 模型目录：照 dsh-api-session-controller 范式 listProviders→listModels；单 provider 失败隔离。
+// 目录不含当前默认模型时把默认置顶补入（只补默认这一条，不硬造其余模型）。
+export function makeModelsHandler(llm, defaultModel) {
+  return async function handler(req, res) {
+    if (req.method !== 'GET') { sendJson(res, 405, { error: '仅 GET' }); return }
+    const sel = defaultModel.currentSelection()
+    const models = []
+    const failed = []
+    for (const p of llm.listProviders()) {
+      try {
+        for (const m of await llm.listModels(p.id)) {
+          models.push({ provider: p.id, id: m.id, name: m.name || m.id, ...(m.description ? { description: m.description } : {}) })
+        }
+      } catch { failed.push(p.id) }
+    }
+    if (!models.some((m) => m.provider === sel.provider && m.id === sel.model)) {
+      models.unshift({ provider: sel.provider, id: sel.model, name: sel.model })
+    }
+    sendJson(res, 200, { models, default: { provider: sel.provider, model: sel.model }, failedProviders: failed })
+  }
+}
+
 export function apply(ctx) {
   const state = loadConnections()
   const getConn = () => getActive(state)
@@ -199,22 +258,27 @@ export function apply(ctx) {
       ['/dblens/query', makeQueryHandler(getConn)],
       ['/dblens/audit', makeAuditHandler()],
       ['/dblens/connections', makeConnectionsHandler(state)],
+      ['/dblens/test-connection', makeTestConnectionHandler(state)],
     ]
     for (const [p, handler] of routes) {
       scoped.effect(() => scoped.webServer.register({ kind: 'exact', path: p, handler }), `db-lens: ${p}`)
     }
   })
   ctx.inject(['webServer', 'llm', 'agentDefaultModel'], (scoped) => {
-    const generate = (question, schema) => {
+    const generate = (question, schema, override) => {
       const sel = scoped.agentDefaultModel.currentSelection()
       return generateSql({
         streamImpl: (opts) => scoped.llm.stream(opts),
-        provider: sel.provider, model: sel.model, question, schema,
+        provider: override?.provider || sel.provider, model: override?.model || sel.model, question, schema,
       })
     }
     scoped.effect(
       () => scoped.webServer.register({ kind: 'exact', path: '/dblens/generate', handler: makeGenerateHandler(generate, getConn) }),
       'db-lens: generate route',
+    )
+    scoped.effect(
+      () => scoped.webServer.register({ kind: 'exact', path: '/dblens/models', handler: makeModelsHandler(scoped.llm, scoped.agentDefaultModel) }),
+      'db-lens: models route',
     )
   })
   ctx.inject(['tools'], (scoped) => {

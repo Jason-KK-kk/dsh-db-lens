@@ -93,3 +93,99 @@ test('🔴 不带原型专用脚本（状态切换器/强制主题/mock/hash 视
     assert.ok(!src.includes(bad), '残留原型专用：' + bad)
   assert.ok(!/const VIEWS\s*=/.test(src), '残留原型 VIEWS 状态切换器')
 })
+
+// ── schema 树折叠行为闸 ────────────────────────────────────────────────
+// 本机无 react 依赖（DSH 运行时才注入），故用最小 hooks 运行时跑 client.js 里真实的
+// TableNode 源码：只实现 useState + 渲染期 setState 重渲染，够驱动折叠开关。
+// 真实 DOM/computed style 证据另见 evidence/K-*（真浏览器过滤后点 caret）。
+const hStub = (type, props, ...kids) => ({ type, props: props || {}, kids: kids.flat(Infinity).filter((k) => k != null && k !== false) })
+const ChevStub = () => hStub('svg', { className: 'chev' })
+const TABLE = { name: 'order_items', rowCount: 573, columns: [{ name: 'id', type: 'INTEGER', pk: true }, { name: 'order_id', type: 'INTEGER' }] }
+
+function mountTableNode(initialF) {
+  const body = src.match(/function TableNode\(props\) \{[\s\S]*?\n    \}/)
+  assert.ok(body, 'client.js 里找不到 TableNode 函数体')
+  const hooks = []
+  let cursor = 0
+  let dirty = false
+  let renders = 0
+  let f = ''
+  let tree
+  const useState = (init) => {
+    const i = cursor++
+    if (!(i in hooks)) hooks[i] = typeof init === 'function' ? init() : init
+    return [hooks[i], (v) => {
+      const next = typeof v === 'function' ? v(hooks[i]) : v
+      if (next !== hooks[i]) { hooks[i] = next; dirty = true }
+    }]
+  }
+  const TableNode = new Function('h', 'useState', 'Chev', body[0] + '\nreturn TableNode')(hStub, useState, ChevStub)
+  const settle = () => {
+    do {
+      dirty = false
+      cursor = 0
+      tree = TableNode({ t: TABLE, f })
+      if (++renders > 50) throw new Error('TableNode 渲染不收敛（渲染期 setState 死循环）')
+    } while (dirty)
+  }
+  const find = (node, cls) => {
+    if (!node || typeof node !== 'object') return null
+    if (String(node.props.className || '').split(' ').includes(cls)) return node
+    for (const k of node.kids) { const hit = find(k, cls); if (hit) return hit }
+    return null
+  }
+  settle()
+  const api = {
+    node: () => find(tree, 'tnode'),
+    row: () => find(tree, 'trow'),
+    clickRow() { find(tree, 'trow').props.onClick(); settle() },
+    setFilter(next) { f = next; settle() },
+  }
+  if (initialF) api.setFilter(initialF)
+  return api
+}
+
+test('schema 折叠：无过滤时点表头能展开再折叠（阴性对照）', () => {
+  const m = mountTableNode('')
+  assert.equal(m.node().props['data-open'], '0', '初始应折叠')
+  m.clickRow()
+  assert.equal(m.node().props['data-open'], '1', '无过滤点一下应展开')
+  m.clickRow()
+  assert.equal(m.node().props['data-open'], '0', '无过滤再点应折叠')
+})
+
+test('🔴 schema 折叠：过滤态下点 caret 必须能折叠，再点能展开', () => {
+  const m = mountTableNode('orde')
+  assert.equal(m.node().props['data-open'], '1', '过滤命中应自动展开')
+  m.clickRow()
+  assert.equal(m.node().props['data-open'], '0', '过滤态点 caret 折叠失效（data-open 仍为 1）')
+  assert.equal(m.row().props['aria-expanded'], false, '折叠后 aria-expanded 应为 false')
+  m.clickRow()
+  assert.equal(m.node().props['data-open'], '1', '过滤态再点 caret 应重新展开')
+  assert.equal(m.row().props['aria-expanded'], true, '展开后 aria-expanded 应为 true')
+})
+
+test('schema 折叠：过滤中折叠后改过滤词不被强行掰回展开', () => {
+  const m = mountTableNode('orde')
+  m.clickRow()
+  assert.equal(m.node().props['data-open'], '0')
+  m.setFilter('order')
+  assert.equal(m.node().props['data-open'], '0', '同在过滤态内换词不应覆盖用户折叠选择')
+})
+
+test('schema 折叠：过滤中才出现的表（挂载即带过滤）也自动展开且可折叠', () => {
+  const m = mountTableNode('orde')
+  assert.equal(m.node().props['data-open'], '1', '带过滤挂载应自动展开')
+  m.clickRow()
+  assert.equal(m.node().props['data-open'], '0', '带过滤挂载后点 caret 应能折叠')
+})
+
+test('schema 折叠：清空过滤恢复全折叠初态；data-open 是唯一折叠开关（CSS 两侧都在）', () => {
+  const m = mountTableNode('orde')
+  m.setFilter('')
+  assert.equal(m.node().props['data-open'], '0', '清空过滤应回到折叠初态')
+  m.clickRow()
+  assert.equal(m.node().props['data-open'], '1', '清空后折叠开关仍可用')
+  assert.match(css, /\.tnode\[data-open="0"\] \.cols\{display:none\}/, '折叠态未隐藏列')
+  assert.match(css, /\.tnode\[data-open="0"\] \.trow \.chev\{transform:rotate\(0\)\}/, '折叠态 caret 未转回')
+})

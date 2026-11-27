@@ -372,13 +372,18 @@ window.__ModuleLoader__.load({
     }
     function TableNode(props) {
       const { t, f } = props
-      const [open, setOpen] = useState(false)
-      const eff = !!f || open
+      const [open, setOpen] = useState(!!f)
+      const [seenF, setSeenF] = useState(f)
+      // 自动展开只在「过滤开/关」切换那一帧发生：过滤态内持续强制展开会让 caret 点了没反应。
+      if (seenF !== f) {
+        setSeenF(f)
+        if (!!seenF !== !!f) setOpen(!!f)
+      }
       const cols = f && !t.name.toLowerCase().includes(f)
         ? t.columns.filter((c) => c.name.toLowerCase().includes(f))
         : t.columns
-      return h('div', { className: 'tnode', 'data-open': eff ? '1' : '0' },
-        h('button', { className: 'trow', onClick: () => setOpen(!open), 'aria-expanded': eff },
+      return h('div', { className: 'tnode', 'data-open': open ? '1' : '0' },
+        h('button', { className: 'trow', onClick: () => setOpen(!open), 'aria-expanded': open },
           h(Chev),
           h('span', { className: 'tn' }, t.name),
           h('span', { className: 'grow' }),

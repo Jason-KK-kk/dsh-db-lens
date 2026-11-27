@@ -15,22 +15,56 @@ const READ_PRAGMAS = new Set([
   'quick_check', 'compile_options',
 ])
 
-// 去掉 -- 与 /* */ 注释；引号内内容原样保留（含 '' 转义）。
+// 字面量识别（stripComments 与堆叠检测共用）：普通引号（双写转义）、[括号]、
+// PG E'...'（反斜杠转义）、dollar-quoted $$/$tag$（内容全字面，注释标记不生效）。
+// 返回字面量结束后一位；非字面量起点返回 -1；未闭合返回 length（余下按串内，引擎层兜底拒）。
+function literalEnd(sql, i) {
+  const c = sql[i]
+  if ((c === 'E' || c === 'e') && sql[i + 1] === "'" && (i === 0 || !/[A-Za-z0-9_$]/.test(sql[i - 1]))) {
+    for (let j = i + 2; j < sql.length; j++) {
+      if (sql[j] === '\\') { j++; continue }
+      if (sql[j] === "'") {
+        if (sql[j + 1] === "'") { j++; continue }
+        return j + 1
+      }
+    }
+    return sql.length
+  }
+  if (c === '$') {
+    const m = /^\$([A-Za-z_][A-Za-z0-9_]*)?\$/.exec(sql.slice(i))
+    if (!m) return -1
+    const close = sql.indexOf(m[0], i + m[0].length)
+    return close === -1 ? sql.length : close + m[0].length
+  }
+  if (c === "'" || c === '"' || c === '`') {
+    for (let j = i + 1; j < sql.length; j++) {
+      if (sql[j] === c) {
+        if (sql[j + 1] === c) { j++; continue }
+        return j + 1
+      }
+    }
+    return sql.length
+  }
+  if (c === '[') {
+    for (let j = i + 1; j < sql.length; j++) {
+      if (sql[j] === ']') {
+        if (sql[j + 1] === ']') { j++; continue }
+        return j + 1
+      }
+    }
+    return sql.length
+  }
+  return -1
+}
+
+// 去掉 -- 与 /* */ 注释；字面量内内容原样保留（含转义；执行文本不被改写）。
 export function stripComments(sql) {
   let out = ''
-  let quote = null
   for (let i = 0; i < sql.length; i++) {
+    const end = literalEnd(sql, i)
+    if (end !== -1) { out += sql.slice(i, end); i = end - 1; continue }
     const c = sql[i]
     const next = sql[i + 1]
-    if (quote) {
-      out += c
-      if (c === quote) {
-        if (next === quote) { out += next; i++ } else { quote = null }
-      }
-      continue
-    }
-    if (c === "'" || c === '"' || c === '`') { quote = c; out += c; continue }
-    if (c === '[') { quote = ']'; out += c; continue }
     if (c === '-' && next === '-') {
       while (i < sql.length && sql[i] !== '\n') i++
       out += '\n'
@@ -49,19 +83,10 @@ export function stripComments(sql) {
 }
 
 function hasSemicolonOutsideQuotes(sql) {
-  let quote = null
   for (let i = 0; i < sql.length; i++) {
-    const c = sql[i]
-    if (quote) {
-      if (c === quote) {
-        if (sql[i + 1] === quote) i++
-        else quote = null
-      }
-      continue
-    }
-    if (c === "'" || c === '"' || c === '`') { quote = c; continue }
-    if (c === '[') { quote = ']'; continue }
-    if (c === ';') return true
+    const end = literalEnd(sql, i)
+    if (end !== -1) { i = end - 1; continue }
+    if (sql[i] === ';') return true
   }
   return false
 }

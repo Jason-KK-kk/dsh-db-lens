@@ -16,6 +16,7 @@ window.__ModuleLoader__.load({
     const CONN_EP = '/dblens/connections'
     const TEST_EP = '/dblens/test-connection'
     const MODELS_EP = '/dblens/models'
+    const SETTINGS_EP = '/dblens/settings'
 
     const CSS = `
 .dblens{
@@ -130,6 +131,8 @@ window.__ModuleLoader__.load({
 .dblens .conn-form .inp,.dblens .conn-form .sel{width:100%;min-width:0}
 .dblens .conn-form .wide{grid-column:1/-1}
 .dblens .ask-model{max-width:300px;min-width:0}
+.dblens .strict-toggle{display:inline-flex;align-items:center;gap:6px;font-size:12px;color:var(--ink-2);cursor:pointer;white-space:nowrap}
+.dblens .strict-toggle input{accent-color:var(--jade);width:14px;height:14px;cursor:pointer}
 .dblens .db-row{display:flex;align-items:center;gap:6px;padding:6px 8px;background:var(--surface-2);border:1px solid var(--line);border-radius:var(--r-ctl);margin-bottom:var(--s2)}
 .dblens .db-row .nm{font:12px/1.4 var(--mono);color:var(--ink);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .dblens .db-row .grow{flex:1}
@@ -187,6 +190,8 @@ window.__ModuleLoader__.load({
 .dblens .grid tbody tr:nth-child(odd) td.rownum{background:#171B21}
 .dblens .grid tbody tr:hover td.rownum{background:#20262E}
 .dblens .grid thead th.rownum{z-index:5;background:#171B21;cursor:default;border-right:1px solid var(--line)}
+.dblens .grid thead th:focus-visible{z-index:6}
+.dblens .grid tbody td:focus-visible{position:relative;z-index:4}
 .dblens .grid-foot{display:flex;align-items:center;gap:var(--s3);padding:6px 10px;border-top:1px solid var(--line);background:#0E1114;font:10px/1.5 var(--mono);color:var(--ink-3);flex-wrap:wrap}
 .dblens .grid-foot .grow{flex:1}
 .dblens .cellpop{position:fixed;z-index:60;width:380px;max-width:calc(100vw - 32px);background:var(--surface);border:1px solid #333B44;border-radius:var(--r-card);box-shadow:0 18px 44px rgba(0,0,0,.6);overflow:hidden}
@@ -501,6 +506,32 @@ window.__ModuleLoader__.load({
       const [models, setModels] = useState(null)
       const [modelSel, setModelSel] = useState(null)
       const [modelsNote, setModelsNote] = useState(null)
+      // 严格模式＝NL 人确认层开关；读取失败/未加载一律按开（安全默认）。只读护栏不受此开关影响。
+      const [strictNl, setStrictNl] = useState(true)
+      const [strictErr, setStrictErr] = useState(null)
+
+      const loadSettings = useCallback(async () => {
+        try {
+          const r = await fetch(SETTINGS_EP)
+          const j = await r.json()
+          if (r.ok) setStrictNl(j.strictNl !== false)
+        } catch { /* 读失败＝保持严格开 */ }
+      }, [])
+      useEffect(() => { loadSettings() }, [loadSettings, open])
+
+      const toggleStrict = useCallback(async (checked) => {
+        setStrictErr(null)
+        try {
+          const r = await fetch(SETTINGS_EP, {
+            method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ strictNl: checked }),
+          })
+          const j = await r.json()
+          if (!r.ok) { setStrictErr('严格模式保存失败：' + (j.error || 'HTTP ' + r.status)); return }
+          setStrictNl(j.strictNl !== false)
+        } catch (e) {
+          setStrictErr('严格模式保存失败：' + (e && e.message ? e.message : String(e)))
+        }
+      }, [])
 
       const loadModels = useCallback(async () => {
         try {
@@ -532,14 +563,20 @@ window.__ModuleLoader__.load({
             setGenErr((j.error || 'HTTP ' + r.status) + codeTag + (j.retryable ? '（可重试）' : ''))
             return
           }
-          setGenSql(j.sql)
-          setGenModel(j.model)
+          if (strictNl) {
+            setGenSql(j.sql)
+            setGenModel(j.model)
+          } else {
+            // 严格关：自动执行，仍走 onExec→/dblens/query 同一只读/限量/超时/审计护栏。
+            onExec(j.sql)
+            setDone(true)
+          }
         } catch (e) {
           setGenErr('连接失败：' + (e && e.message ? e.message : String(e)))
         } finally {
           setGenerating(false)
         }
-      }, [question, modelSel])
+      }, [question, modelSel, strictNl, onExec])
 
       const confirm = useCallback(() => {
         onExec(genSql)
@@ -554,7 +591,9 @@ window.__ModuleLoader__.load({
         : done ? h('span', { className: 'chip ro' }, '已执行') : h('span', { className: 'chip nn' }, '待命')
 
       return h(Card, {
-        eyebrow: 'Ask', title: '自然语言问数', sub: '生成后须人点确认才执行', open, onToggle, extra: stateChip,
+        eyebrow: 'Ask', title: '自然语言问数',
+        sub: strictNl ? '生成后须人点确认才执行' : '严格模式关 · 生成后自动执行（仍只读）',
+        open, onToggle, extra: stateChip,
       },
         h('textarea', {
           className: 'ta ask', placeholder: '用一句话描述想查什么，例如：每个城市的客户数是多少',
@@ -574,10 +613,18 @@ window.__ModuleLoader__.load({
               setModelSel({ provider: v.slice(0, i), model: v.slice(i + 1) })
             },
           }, (models || []).map((m) => h('option', { key: m.provider + '/' + m.id, value: m.provider + '/' + m.id }, m.name + '（' + m.provider + '/' + m.id + '）'))),
+          h('label', { className: 'strict-toggle', title: '严格模式：生成的 SQL 须人点确认才执行；关闭后生成即自动查询（仍只读）' },
+            h('input', {
+              type: 'checkbox', checked: strictNl, onChange: (e) => toggleStrict(e.target.checked),
+              'aria-label': '严格模式：生成的 SQL 须人点确认才执行',
+            }),
+            h('span', null, '严格模式')),
           h('span', { className: 'grow' }),
-          h('span', { className: 'qhint' }, '生成阶段零查询发出')),
+          h('span', { className: 'qhint' }, strictNl ? '生成阶段零查询发出' : '生成后自动执行 · 走同一护栏')),
         h(Notice, { kind: 'bad', ic: '⛔', text: genErr }),
         h(Notice, { kind: 'info', ic: 'ℹ', text: modelsNote }),
+        !strictNl ? h(Notice, { kind: 'info', ic: 'ℹ', text: '严格模式已关：AI 生成 SQL 后自动执行查询，仍只读 / 限量 / 超时 / 审计，写操作仍拒。' }) : null,
+        h(Notice, { kind: 'bad', ic: '⛔', text: strictErr }),
         genSql != null ? h('div', { className: 'gate' },
           h('div', { className: 'gate-head' },
             h('span', { className: 'ic' }, '🔒'),
@@ -664,6 +711,19 @@ window.__ModuleLoader__.load({
 
       const meta = result ? result.rowCount + ' 行 · ' + result.columns.length + ' 列' + (result.durationMs != null ? ' · ' + result.durationMs + ' ms' : '') : '尚未执行'
       const closePop = useCallback(() => setPop(null), [])
+      // 键盘开弹层没有鼠标坐标：取单元格右下角定位（焦点环由全局 :focus-visible 规则给）。
+      const openPop = (ev, c, v) => {
+        const r = ev.currentTarget && ev.currentTarget.getBoundingClientRect ? ev.currentTarget.getBoundingClientRect() : null
+        const x = ev.type === 'keydown' ? (r ? r.right : 12) : ev.clientX
+        const y = ev.type === 'keydown' ? (r ? r.bottom : 12) : ev.clientY
+        setPop({ col: c, value: v, x: x + 12, y: y + 12 })
+      }
+      const cellKey = (ev, c, v) => {
+        if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); openPop(ev, c, v) }
+      }
+      const sortKey = (ev, c) => {
+        if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); clickSort(c) }
+      }
 
       let body
       if (!result) {
@@ -682,7 +742,9 @@ window.__ModuleLoader__.load({
                 h('thead', null, h('tr', null,
                   h('th', { className: 'rownum' }, '#'),
                   result.columns.map((c) => h('th', {
-                    key: c, className: numeric.has(c) ? 'n' : null, title: '点按排序：' + c, onClick: () => clickSort(c),
+                    key: c, className: numeric.has(c) ? 'n' : null, title: '点按或回车排序：' + c,
+                    tabIndex: 0, role: 'button', 'aria-sort': sort && sort.col === c ? (sort.dir === 'asc' ? 'ascending' : 'descending') : 'none',
+                    onClick: () => clickSort(c), onKeyDown: (ev) => sortKey(ev, c),
                   }, c, sort && sort.col === c ? h('span', { className: 'sort' }, sort.dir === 'asc' ? '▲' : '▼') : null)))),
                 h('tbody', null, rows.map((r, i) => h('tr', { key: i },
                   h('td', { className: 'rownum' }, String(i + 1)),
@@ -691,12 +753,13 @@ window.__ModuleLoader__.load({
                     const cls = ((numeric.has(c) ? 'n' : '') + (v == null ? ' null' : '')).trim()
                     return h('td', {
                       key: c, className: cls || null, title: v == null ? 'NULL' : String(v),
-                      onClick: (ev) => setPop({ col: c, value: v, x: ev.clientX + 12, y: ev.clientY + 12 }),
+                      tabIndex: 0, role: 'button', 'aria-label': c + '：' + (v == null ? 'NULL' : String(v)),
+                      onClick: (ev) => openPop(ev, c, v), onKeyDown: (ev) => cellKey(ev, c, v),
                     }, v == null ? 'NULL' : String(v))
                   })))))),
             h('div', { className: 'grid-foot' },
               h('span', null, '显示 1–' + rows.length + ' / 共 ' + result.rowCount + ' 行'),
-              h('span', null, '列头排序 · 单元格点开看全值'),
+              h('span', null, '列头排序 · 单元格点开或回车看全值'),
               h('span', { className: 'grow' }),
               h('span', null, result.truncated ? '已截断' : '完整结果'))))
       }

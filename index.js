@@ -3,7 +3,7 @@
 import { fileURLToPath } from 'node:url'
 import { fork } from 'node:child_process'
 import { assertReadOnly, GateError } from './sql-guard.js'
-import { loadLimits, DEFAULTS } from './limits.js'
+import { loadLimits, loadStrictNl, saveStrictNl, DEFAULTS } from './limits.js'
 import { audit, readAuditTail } from './audit.js'
 import { generateSql } from './nl2sql.js'
 import { makeDbTools } from './agent-tools.js'
@@ -178,6 +178,26 @@ export function makeAuditHandler(opts = {}) {
   }
 }
 
+// 严格模式开关：只读写 strictNl（NL 人确认层）；只读/限量/超时/审计护栏不经过此路由。
+export function makeSettingsHandler(opts = {}) {
+  const configPath = opts.configPath
+  return async function handler(req, res) {
+    if (req.method === 'GET') {
+      sendJson(res, 200, { strictNl: loadStrictNl(configPath) })
+      return
+    }
+    if (req.method === 'POST') {
+      let payload
+      try { payload = JSON.parse(await readBody(req)) } catch { sendJson(res, 400, { error: '请求体不是合法 JSON' }); return }
+      if (typeof payload.strictNl !== 'boolean') { sendJson(res, 400, { error: 'strictNl 必须是布尔值（true/false）' }); return }
+      saveStrictNl(payload.strictNl, configPath)
+      sendJson(res, 200, { strictNl: payload.strictNl })
+      return
+    }
+    sendJson(res, 405, { error: '仅 GET/POST' })
+  }
+}
+
 export function makeConnectionsHandler(state) {
   return async function handler(req, res) {
     if (req.method === 'GET') {
@@ -259,6 +279,7 @@ export function apply(ctx) {
       ['/dblens/audit', makeAuditHandler()],
       ['/dblens/connections', makeConnectionsHandler(state)],
       ['/dblens/test-connection', makeTestConnectionHandler(state)],
+      ['/dblens/settings', makeSettingsHandler()],
     ]
     for (const [p, handler] of routes) {
       scoped.effect(() => scoped.webServer.register({ kind: 'exact', path: p, handler }), `db-lens: ${p}`)

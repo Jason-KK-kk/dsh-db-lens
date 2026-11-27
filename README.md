@@ -1,6 +1,8 @@
 # dsh-db-lens · 数据库透镜
 
 > 给 [DeepSeek Harness（DSH）](https://github.com/deepseek-ai) 的 agent 配一个**只读、限量、留痕的查数窗口**——人看得见 schema 与结果、拿得走 CSV、放心把库交给 agent。
+>
+> 当前版本 **v0.2.0**（更新见 [CHANGELOG.md](./CHANGELOG.md)）。
 
 给 DSH 接数据库的个人与团队。不跟 DBeaver/Navicat 拼 GUI 功能，价值在「与 DSH agent 联动＋安全护栏」。
 
@@ -29,11 +31,12 @@ agent 查数工具（`db_lens_query` / `db_lens_schema`）走与面板**完全�
 
 ## 功能
 
-- **连接管理**：SQLite 文件 / MySQL / PostgreSQL；内置示例 SQLite 开箱即玩。
-- **schema 树**：库→表→列（类型/主键/约束），读自库内真实结构。
-- **查数＋结果表**：手写 SELECT 出可排序结果表，一键导出 CSV。
-- **自然语言问数**：喂真实 schema 上下文给 DSH 当前模型生成 SQL，人确认后执行。
+- **连接管理**：SQLite 文件 / MySQL / PostgreSQL；内置示例 SQLite 开箱即玩；「测试连接」按钮＋保存/切换成功失败提醒（带原因）。
+- **schema 树**：库→表→列（类型/主键/约束），读自库内真实结构；可过滤、单表折叠、全部展开/全部折叠；表多时常显滚动条。
+- **查数＋结果表**：手写 SELECT 出可排序结果表（固定表头＋冻结行号＋双向滚动＋点单元格看全值），一键导出 CSV。
+- **自然语言问数**：喂真实 schema 上下文生成 SQL，人确认后执行；模型下拉可选 DSH 已配置模型（默认当前默认模型）。
 - **agent 工具**：DSH agent 可自主只读查数，同护栏兜底。
+- **面板**：全宽双栏＋模块卡片＋顶部护栏状态条（只读/上限/超时/审计），沿用 DSH 深色主题。
 
 ## 安装
 
@@ -56,7 +59,7 @@ dsh web --no-open
 
 ## 连接自己的数据库
 
-面板「＋添加连接」选类型填表：
+面板「＋添加连接」选类型填表，填完可点「测试连接」先验证；保存/切换后会有成功（绿）/失败（红＋原因）提醒：
 
 - **SQLite**：文件路径。
 - **MySQL / PostgreSQL**：主机 / 端口 / 用户名 / 密码 / 数据库名。
@@ -79,7 +82,7 @@ dsh web --no-open
 
 ```bash
 npm install
-node --test "test/*.test.mjs"   # 42 项单测，不烧 token、不依赖活库
+node --test "test/*.test.mjs"   # 99 项单测，不烧 token、不依赖活库
 node scripts/seed-sample.mjs    # 重建内置示例 SQLite
 ```
 
@@ -88,7 +91,8 @@ MySQL/PG 集成验收（可选，需本机 Docker）：起临时容器后 `ROOT_
 ## 能力边界（不夸大）
 
 - 只读：不提供任何写操作入口。
-- 问数 SQL 质量取决于 DSH 当前模型；复杂多库/多轮查询质量未做广泛验证。
+- 问数 SQL 质量取决于所选模型；复杂多库/多轮查询质量未做广泛验证。
+- 问数超时＝空闲 20s 无响应／总上限 180s（推理模型思考时间不计失败）；窄屏断点与键盘走查未做。
 - 不做：ER 图、慢查询分析、多用户、云同步、连接串云备份。
 
 ## 免责
